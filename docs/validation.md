@@ -14,8 +14,8 @@ Validated locally:
   pinned VibeSys source checkout; packaged hashes preserve analyzer provenance.
 - Built wheel and source archive installation/content checks, including publication exclusions.
 
-The CI configuration targets Linux and Python 3.11–3.14 without GPU/model downloads.
-Its remote runs can only be confirmed after the repository is published and CI executes.
+GitHub CI passed on Linux with Python 3.11–3.14, including package tests, release
+audits and isolated installed-wheel CLI workflows. These runs require no GPUs or model downloads.
 Optional source-reference parity tests skip when a separate upstream checkout is absent;
 regular synthetic reference and packaged-provenance tests do not require it.
 
@@ -41,7 +41,9 @@ or VibeSys official gate acceptance.
   canaries were excluded from all three release archives.
 - Serving authentication is separated from DCGM requests; the regression test confirms
   that the serving Bearer token is not forwarded to the exporter.
-- A fresh local Git repository was prepared; no remote repository or package was published.
+- The production profiler is published on GitHub’s `production-profiling` branch.
+  The earlier dashboard remains on `main` pending the migration pull request.
+  PyPI publication is separate and has not occurred.
 
 The audit flags known private-data patterns and unexpected files. It is not a guarantee
 that arbitrary future additions cannot contain confidential information; review each release.
@@ -61,3 +63,6 @@ that arbitrary future additions cannot contain confidential information; review 
   hints preserve this handoff without exporting original filenames.
 - No real engines/models were launched; GPU deployment validation and automatic
   hypothesis loading remain outstanding. See [friend-quickstart.md](friend-quickstart.md).
+
+The public GitHub install command was verified in a fresh environment, followed by
+both engine CLI end-to-end protocol tests. No real GPU deployment was launched.
