@@ -1,0 +1,12 @@
+obsrv
+Copyright (c) 2026 obsrv contributors.
+
+The profiling analyzers in src/obsrv/_vendor are adapted from VibeSys:
+https://github.com/uw-syfi/vibesys
+Source revision: 41dd0a8eb2db160c3ae43e4472401cd663f839e5
+Copyright (c) 2026 Keisuke Kamahori.
+Licensed under the MIT license, reproduced in src/obsrv/_vendor/VIBESYS_LICENSE.
+
+Source and adapted-file SHA256 digests are recorded in provenance.json.
+The source's measurement algorithms and notices are preserved; standalone capture
+entrypoints and runtime imports are adapted for offline package analysis.

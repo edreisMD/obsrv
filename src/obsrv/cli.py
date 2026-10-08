@@ -1,128 +1,160 @@
-"""Local collection and agent evidence exports; no inference proxy or deployment mutations."""
+"""Headless operator interface. Collection never triggers profiles."""
 
 import argparse
 import json
-import math
 import sys
 import time
-from pathlib import Path
 
-from .analysis import analyze
-from .collector import collect_once
-from .config import load_config
-from .store import Store
-
-
-def _write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
+from .activation import activate, deployment_directory, deployment_settings
+from .analysis import import_trace
+from .collector import Collector
+from .config import Config
+from .evidence import export_context, report, verify_export
+from .profiling import ProfileController
+from .store import EvidenceStore, StorageLimitError
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    collect = commands.add_parser("collect", help="Record DCGM and serving metrics in SQLite")
-    collect.add_argument("--config", required=True)
-    collect.add_argument("--db", required=True)
-    collect.add_argument("--duration", type=float, default=60)
-    report = commands.add_parser(
-        "report", help="Export an evidence report for an optimization agent"
+    parser = argparse.ArgumentParser(prog="obsrv", description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    for name in ("collect", "profile", "import", "report", "export-context"):
+        child = sub.add_parser(name)
+        selection = child.add_mutually_exclusive_group(required=True)
+        selection.add_argument("--config")
+        selection.add_argument(
+            "--deployment", help="deployment activated in this working directory"
+        )
+        if name == "collect":
+            child.add_argument("--count", type=int, help="finite scrape count; default continuous")
+        elif name == "profile":
+            child.add_argument("--duration", type=float, default=30)
+            child.add_argument("--recover", metavar="CAPTURE_ID")
+        elif name == "import":
+            child.add_argument("path")
+            child.add_argument("--profiler", choices=("torch", "nsys"), required=True)
+            child.add_argument("--worker", required=True)
+        elif name == "report":
+            child.add_argument("--all-versions", action="store_true")
+    child = sub.add_parser("activate", help="discover a deployment and start passive collection")
+    child.add_argument("--engine", choices=("vllm", "sglang"), required=True)
+    child.add_argument("--url", required=True)
+    child.add_argument("--deployment")
+    child.add_argument("--revision", default="unknown")
+    child.add_argument("--model")
+    child.add_argument("--state-dir")
+    child.add_argument("--trace-dir")
+    child.add_argument("--auth-env")
+    child.add_argument("--count", type=int)
+    child.add_argument("--setup-only", action="store_true")
+    child = sub.add_parser(
+        "deployment-settings", help="print engine launch settings; do not launch"
     )
-    report.add_argument("--db", required=True)
-    report.add_argument("--run")
-    report.add_argument("--out", required=True)
-    export = commands.add_parser("export", help="Export stored samples as versioned JSONL")
-    export.add_argument("--db", required=True)
-    export.add_argument("--run")
-    export.add_argument("--out", required=True)
-    demo = commands.add_parser(
-        "demo", help="Generate deterministic synthetic evidence without a GPU"
-    )
-    demo.add_argument("--out", default="artifacts/demo")
-    trace = commands.add_parser("trace", help="Analyze observed GPU gaps in a Chrome/PyTorch trace")
-    trace.add_argument("--input", required=True)
-    trace.add_argument("--device", required=True)
-    trace.add_argument("--start-us", type=float, required=True)
-    trace.add_argument("--end-us", type=float, required=True)
-    trace.add_argument("--out", required=True)
-    dashboard = commands.add_parser(
-        "dashboard", help="View capture comparisons and optimization history"
-    )
-    dashboard.add_argument("--db", action="append", default=[])
-    dashboard.add_argument("--benchmark-dir")
-    dashboard.add_argument("--demo", action="store_true")
-    dashboard.add_argument("--monitor-local", action="store_true")
-    dashboard.add_argument("--journal", help="Local Apple telemetry JSONL journal")
-    dashboard.add_argument("--port", type=int, default=8765)
+    child.add_argument("--engine", choices=("vllm", "sglang"), required=True)
+    child.add_argument("--trace-dir", required=True)
+    child = sub.add_parser("verify", help="verify a self-contained exported bundle")
+    child.add_argument("path")
     args = parser.parse_args(argv)
-    try:
-        if args.command == "dashboard":
-            from .dashboard import serve
-
-            if args.demo and (args.db or args.benchmark_dir or args.monitor_local):
-                raise ValueError("Demo mode cannot be mixed with real captures or local monitoring")
-            serve(
-                port=args.port,
-                databases=args.db,
-                benchmark_dir=args.benchmark_dir,
-                demo=args.demo,
-                local_monitor=args.monitor_local,
-                journal=args.journal,
-            )
-            return 0
-        if args.command == "trace":
-            from .trace import trace_gaps
-
-            document = json.loads(Path(args.input).read_text())
-            _write_json(
-                args.out,
-                trace_gaps(
-                    document, device=args.device, start_us=args.start_us, end_us=args.end_us
-                ),
-            )
-            return 0
-        if args.command == "demo":
-            from .demo import make_demo
-
-            print(json.dumps(make_demo(Path(args.out))))
-            return 0
-        if args.command == "collect":
-            if not math.isfinite(args.duration) or args.duration <= 0:
-                raise ValueError("duration must be finite and positive")
-            config = load_config(args.config)
-            with Store(args.db) as store:
-                run = store.start(config)
-                print(json.dumps({"run_id": run, "config_sha256": config.sha256}), flush=True)
-                deadline = time.monotonic() + args.duration
-                next_scrape = time.monotonic()
-                seq = 0
-                try:
-                    while time.monotonic() < deadline:
-                        store.append(run, seq, collect_once(config))
-                        seq += 1
-                        next_scrape += config.interval_seconds
-                        # Missed ticks are skipped, never followed by a catch-up burst.
-                        if next_scrape < time.monotonic():
-                            next_scrape = time.monotonic() + config.interval_seconds
-                        time.sleep(max(0, min(next_scrape, deadline) - time.monotonic()))
-                except KeyboardInterrupt:
-                    store.finish(run, "interrupted")
-                    return 130
-                except Exception:
-                    store.finish(run, "failed")
-                    raise
-                store.finish(run)
-            return 0
-        with Store(args.db) as store:
-            if args.command == "export":
-                store.export_jsonl(args.out, args.run)
-            else:
-                config, frames, identity = store.read(args.run)
-                _write_json(args.out, {**analyze(config, frames), **identity})
+    if args.command == "deployment-settings":
+        print(json.dumps(deployment_settings(args.engine, args.trace_dir), indent=2))
         return 0
-    except (ValueError, OSError, KeyError, TypeError) as exc:
+    if args.command == "verify":
+        verify_export(args.path)
+        print("Export integrity verified")
+        return 0
+    if args.command == "activate":
+        config, path, guidance = activate(
+            engine=args.engine,
+            url=args.url,
+            deployment=args.deployment,
+            revision=args.revision,
+            model=args.model,
+            state_dir=args.state_dir,
+            trace_dir=args.trace_dir,
+            auth_env=args.auth_env,
+        )
+        print(
+            json.dumps(
+                {
+                    "config": str(path),
+                    **guidance,
+                    "next_profile": ["obsrv", "profile", "--config", str(path)],
+                    "next_export": ["obsrv", "export-context", "--config", str(path)],
+                },
+                indent=2,
+            ),
+            flush=True,
+        )
+        if args.setup_only:
+            return 0
+        args.config = str(path)
+        args.command = "collect"
+    else:
+        if args.deployment:
+            args.config = str(deployment_directory(args.deployment) / "obsrv.json")
+        config = Config.load(args.config)
+    store = EvidenceStore(
+        config.state_dir, retention_days=config.retention_days, max_bytes=config.max_storage_bytes
+    )
+    try:
+        if args.command == "collect":
+            if args.count is not None and args.count < 1:
+                parser.error("--count must be positive")
+            collector = Collector(config, store)
+            done = 0
+            while args.count is None or done < args.count:
+                # Reload explicit rollout identity; never infer code versions from metrics.
+                collector.reconfigure(Config.load(args.config))
+                record = collector.collect_once()
+                print(json.dumps(record, allow_nan=False), flush=True)
+                done += 1
+                if args.count is None or done < args.count:
+                    time.sleep(collector.config.interval_seconds)
+        elif args.command == "profile":
+            controller = ProfileController(config, store)
+            result = (
+                controller.recover(args.recover)
+                if args.recover
+                else controller.capture(duration_seconds=args.duration)
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["state"] in {"completed", "recovered"} else 2
+        elif args.command == "import":
+            print(
+                json.dumps(
+                    import_trace(
+                        store,
+                        config.identity,
+                        args.path,
+                        profiler=args.profiler,
+                        worker=args.worker,
+                    ),
+                    indent=2,
+                )
+            )
+        elif args.command == "report":
+            print(
+                json.dumps(report(store, None if args.all_versions else config.identity), indent=2)
+            )
+        elif args.command == "export-context":
+            print(export_context(store, config.identity))
+        return 0
+    finally:
+        store.close()
+
+
+def entrypoint():
+    try:
+        return main()
+    except KeyboardInterrupt:
+        return 130
+    except (ValueError, TypeError, FileNotFoundError, StorageLimitError) as exc:
         print(f"obsrv: {exc}", file=sys.stderr)
-        return 2
+        return 1
+    except Exception as exc:
+        # Transport exceptions can contain credentials and bodies. Emit only the error class.
+        print(f"obsrv failed: {type(exc).__name__}; inspect local status/report", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

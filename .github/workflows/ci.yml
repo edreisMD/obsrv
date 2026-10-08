@@ -1,17 +1,47 @@
-name: checks
-on: [push, pull_request]
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
-  check:
+  test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.14"]
+        python-version: ['3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --frozen --dev --python ${{ matrix.python }}
-      - run: uv run --frozen ruff check .
-      - run: uv run --frozen ruff format --check .
-      - run: uv run --frozen pytest
-      - run: node --check src/obsrv/web/app.js
-      - run: uv build
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . --group dev
+          python -m pip install build
+      - name: Check
+        run: |
+          python -m pytest
+          python -m ruff check src tests scripts
+          python -m ruff format --check src tests scripts
+          python scripts/check_release.py
+      - name: Build and audit distributions
+        run: |
+          python -m build
+          python scripts/check_release.py --archives dist/*.whl dist/*.tar.gz
+      - name: Install wheel in a clean environment
+        run: |
+          python -m venv /tmp/obsrv-wheel
+          /tmp/obsrv-wheel/bin/python -m pip install dist/*.whl pytest
+          OBSRV_E2E_CLI=/tmp/obsrv-wheel/bin/obsrv /tmp/obsrv-wheel/bin/python -m pytest -q -o pythonpath= tests/test_cli_e2e.py
+          cd /tmp
+          /tmp/obsrv-wheel/bin/obsrv --help
+          /tmp/obsrv-wheel/bin/python -c 'import obsrv; from obsrv.analysis import PROVENANCE; assert PROVENANCE["revision"]'

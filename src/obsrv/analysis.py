@@ -1,233 +1,319 @@
-"""Time-weighted evidence. Estimates and correlated demand are not causal attribution."""
+"""Pinned VibeSys analysis, plus clearly separated overlap-safe timeline measurements."""
 
-from itertools import pairwise
+import argparse
+import gzip
+import io
+import json
+import math
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+from dataclasses import asdict
+from pathlib import Path
 
-from .metrics import GPU_METRICS, counter_delta, gauge, serving_metrics
+from ._vendor import nsys, torch
+from .models import Metric
+from .store import EvidenceStore
 
-
-def _midpoint(scrape):
-    # Keep twice the midpoint as integer nanoseconds until subtracting timestamps.
-    return scrape.started_ns + scrape.ended_ns
-
-
-def _interval(old, new, config):
-    dt = (_midpoint(new) - _midpoint(old)) / 2e9
-    if old.error or new.error or not 0 < dt <= config.max_gap_seconds:
-        return None
-    if any((s.ended_ns - s.started_ns) / 1e9 > config.max_gap_seconds for s in (old, new)):
-        return None
-    return dt
-
-
-def _demand(frame, config, metrics):
-    gpu, serving = frame["gpu"], frame["serving"]
-    if gpu.error or serving.error:
-        return None
-    # Both acquisition envelopes must fit within the join tolerance.
-    span = max(gpu.ended_ns, serving.ended_ns) - min(gpu.started_ns, serving.started_ns)
-    if span / 1e9 > config.join_tolerance_seconds:
-        return None
-    running = gauge(serving.samples, metrics["running"], config.serving_labels)
-    waiting = gauge(serving.samples, metrics["waiting"], config.serving_labels)
-    return None if running is None or waiting is None else running + waiting
+_LOCK = threading.RLock()
+PROVENANCE = json.loads((Path(__file__).parent / "_vendor/provenance.json").read_text())
 
 
-def analyze(config, frames):
-    """Summarize a single worker's explicitly mapped GPUs without bridging outages.
+def _report(module, command, args):
+    """Retain the upstream human/agent report exactly, without global stdout redirection."""
+    stream = io.StringIO()
+    previous = module._print
 
-    A current DCGM value represents the preceding interval in this estimate.
-    Its real hardware watch window is exporter-controlled and may differ.
-    """
-    sources = []
-    for frame in frames:
-        by_source = {s.source: s for s in frame}
-        if len(frame) != 2 or set(by_source) != {"gpu", "serving"}:
-            raise ValueError("Each frame requires exactly one gpu and one serving scrape")
-        sources.append(by_source)
-    metrics = serving_metrics(config.engine)
-    gpu_rows = []
-    timeline = []
-    for gpu in config.gpus:
-        elapsed = covered = idle = no_demand = with_demand = unknown_demand = 0.0
-        low_demand = demand_covered = 0.0
-        sm_integral = sm_seconds = 0.0
-        for old, new in pairwise(sources):
-            dt = (_midpoint(new["gpu"]) - _midpoint(old["gpu"])) / 2e9
-            if dt <= 0:
-                raise ValueError("GPU scrape timestamps must increase within a run")
-            elapsed += dt
-            active = gauge(new["gpu"].samples, GPU_METRICS["engine_active"], gpu.labels, ratio=True)
-            previous = gauge(
-                old["gpu"].samples, GPU_METRICS["engine_active"], gpu.labels, ratio=True
-            )
-            valid = _interval(old["gpu"], new["gpu"], config) is not None
-            if not valid or active is None or previous is None:
-                continue
-            covered += dt
-            estimated_idle = dt * (1 - active)
-            idle += estimated_idle
-            demand = _demand(new, config, metrics)
-            previous_demand = _demand(old, config, metrics)
-            # Never call transitional demand intervals stable no-demand/with-demand.
-            if demand is None or previous_demand is None or (demand > 0) != (previous_demand > 0):
-                state = "unknown_or_transitioning_demand"
-                unknown_demand += estimated_idle
-            elif demand == 0:
-                state = "no_demand"
-                no_demand += estimated_idle
-                demand_covered += dt
-            else:
-                state = "with_demand"
-                with_demand += estimated_idle
-                demand_covered += dt
-                if active < config.low_activity_threshold:
-                    low_demand += dt
-            sm = gauge(new["gpu"].samples, GPU_METRICS["sm_active"], gpu.labels, ratio=True)
-            if sm is not None:
-                sm_integral += sm * dt
-                sm_seconds += dt
-            timeline.append(
-                {
-                    "gpu": gpu.id,
-                    "wall_time_ns": new["gpu"].wall_time_ns,
-                    "interval_seconds": dt,
-                    "engine_active_fraction": active,
-                    "estimated_engine_idle_seconds": estimated_idle,
-                    "demand_state": state,
-                    "requests_at_interval_end": demand,
-                }
-            )
-        gpu_rows.append(
+    def output(*values, sep=" ", end="\n", file=None, flush=False):
+        if file is None:
+            stream.write(sep.join(map(str, values)) + end)
+
+    module._print = output
+    connections = []
+    if module is nsys:
+        opener = module._open_db
+
+        def tracked(path):
+            connection, strings = opener(path)
+            connections.append(connection)
+            return connection, strings
+
+        module._open_db = tracked
+    try:
+        command(args)
+        return stream.getvalue()
+    finally:
+        module._print = previous
+        if module is nsys:
+            module._open_db = opener
+            for connection in connections:
+                connection.close()
+
+
+def _union(intervals):
+    merged = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _timeline(events):
+    groups = {}
+    for event in events:
+        if event.get("cat") not in torch._KERNEL_CATS or event.get("ph") != "X":
+            continue
+        args = event.get("args") or {}
+        # Never merge intervals belonging to different GPUs into a utilization estimate.
+        device = str(args.get("device", event.get("pid", "unknown")))
+        groups.setdefault(device, []).append((event["ts"], event["ts"] + event.get("dur", 0)))
+    result = []
+    for device, intervals in sorted(groups.items()):
+        merged = _union(intervals)
+        span = merged[-1][1] - merged[0][0]
+        busy = sum(end - start for start, end in merged)
+        result.append(
             {
-                "gpu": gpu.id,
-                "window_seconds": elapsed,
-                "covered_seconds": covered,
-                "coverage_fraction": covered / elapsed if elapsed else 0.0,
-                "estimated_engine_idle_seconds": idle if covered else None,
-                "estimated_engine_idle_fraction": idle / covered if covered else None,
-                "idle_seconds_no_demand": no_demand if demand_covered else None,
-                "idle_seconds_with_demand": with_demand if demand_covered else None,
-                "idle_seconds_unknown_demand": unknown_demand if covered else None,
-                "demand_classified_seconds": demand_covered,
-                "low_activity_with_demand_seconds": low_demand if demand_covered else None,
-                "mean_sm_active_fraction": sm_integral / sm_seconds if sm_seconds else None,
+                "device": device,
+                "kernel_span_us": span,
+                "kernel_union_busy_us": busy,
+                "internal_gap_us": span - busy,
+                "scope": "between first and last observed kernel; excludes trace edges",
             }
         )
+    return result
 
-    serving = {"counter_intervals_skipped": 0}
-    for field in (
-        "generation_tokens",
-        "prompt_tokens",
-        "ttft_sum",
-        "ttft_count",
-        "itl_sum",
-        "itl_count",
-        "e2e_sum",
-        "e2e_count",
-        "queue_sum",
-        "queue_count",
-    ):
-        total = covered = 0.0
-        for old, new in pairwise(sources):
-            dt = _interval(old["serving"], new["serving"], config)
-            delta = counter_delta(
-                old["serving"].samples,
-                new["serving"].samples,
-                metrics[field],
-                config.serving_labels,
-            )
-            if dt is None or delta is None:
-                if field == "generation_tokens":
-                    serving["counter_intervals_skipped"] += 1
-                continue
-            total += delta
-            covered += dt
-        serving[field] = {
-            "delta": total if covered else None,
-            "covered_seconds": covered,
-            "rate_per_second": total / covered if covered else None,
-        }
 
-    # Pair histogram sum/count deltas in the SAME intervals; no averaging of lifetime means.
-    for field in ("ttft", "itl", "e2e", "queue"):
-        total = count = covered = 0.0
-        for old, new in pairwise(sources):
-            dt = _interval(old["serving"], new["serving"], config)
-            sums, counts = (
-                counter_delta(
-                    old["serving"].samples,
-                    new["serving"].samples,
-                    metrics[field + suffix],
-                    config.serving_labels,
-                )
-                for suffix in ("_sum", "_count")
-            )
-            if dt is not None and sums is not None and counts is not None:
-                total += sums
-                count += counts
-                covered += dt
-        serving[field] = {
-            "mean_seconds": total / count if count else None,
-            "observations": count,
-            "covered_seconds": covered,
-        }
-
-    findings = []
-    for row in gpu_rows:
-        if row["coverage_fraction"] < 0.9:
-            findings.append(
-                {
-                    "gpu": row["gpu"],
-                    "kind": "insufficient_activity_coverage",
-                    "action": "Check exporter field support, mapping and scrape failures.",
-                }
-            )
-        if (row["low_activity_with_demand_seconds"] or 0) > 0:
-            findings.append(
-                {
-                    "gpu": row["gpu"],
-                    "kind": "low_activity_with_demand",
-                    "action": "Trace CPU scheduling, batch formation and synchronization; "
-                    "replay matched load before changing deployment code.",
-                }
-            )
-        if (row["idle_seconds_no_demand"] or 0) > 0:
-            findings.append(
-                {
-                    "gpu": row["gpu"],
-                    "kind": "idle_without_demand",
-                    "action": "Investigate demand, routing or capacity sizing; "
-                    "this alone is not evidence of an inference-code bottleneck.",
-                }
-            )
+def _torch_analysis(path):
+    with gzip.open(path, "rt") if str(path).endswith(".gz") else path.open() as file:
+        raw = json.load(file)
+    if not isinstance(raw, dict) or not isinstance(raw.get("traceEvents"), list):
+        raise ValueError("expected a raw PyTorch/Kineto Chrome trace with traceEvents")
+    for event in raw["traceEvents"]:
+        if not isinstance(event, dict):
+            raise ValueError("invalid trace event")
+        if event.get("ph") == "X":
+            for key in ("ts", "dur"):
+                value = event.get(key, 0)
+                if not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise ValueError("trace timestamp/duration must be finite")
+            if event.get("dur", 0) < 0:
+                raise ValueError("trace duration cannot be negative")
+    index = torch._index_trace(raw)
+    correlations = torch._build_op_to_kernels(index)
+    certification = [asdict(item) for item in torch._certify(index, correlations)]
+    summary = torch._summarize_chrome_trace(raw)
+    args = argparse.Namespace(
+        report=str(path), trace=str(path), top=15, peak_tflops=None, peak_gbps=None, device=None
+    )
+    reports = {"summary": _report(torch, torch.cmd_summary, args)}
+    shapes = [asdict(shape) for shape in torch._extract_gemm_shapes(index, correlations)]
+    reports["gemm_shapes"] = _report(
+        torch, torch.cmd_gemm_shapes, argparse.Namespace(trace=str(path), top=15, out=None)
+    )
+    missing = []
+    roofline = []
+    try:
+        peak_tflops, peak_gbps, _ = torch._resolve_peaks(args, raw)
+        roofline = [
+            asdict(row)
+            for row in torch._extract_roofline_rows(index, correlations, peak_tflops, peak_gbps)
+        ]
+        reports["roofline"] = _report(torch, torch.cmd_roofline, args)
+    except SystemExit:
+        missing.append("roofline unavailable: device peaks not identifiable from trace")
+    metrics = [
+        Metric(name, summary[name], "us", "vibesys:torch").record()
+        for name in ("total_cuda_time_us", "total_cpu_time_us")
+    ]
+    if not index.kernels:
+        missing.append("no GPU kernel events; GPU bottleneck attribution unsupported")
+    if any(item["status"] == "FAIL" for item in certification):
+        missing.append("VibeSys trace certification has FAIL checks; inspect certification")
     return {
-        "schema_version": 1,
-        "deployment": config.deployment,
-        "engine": config.engine,
-        "config_sha256": config.sha256,
-        "metadata": config.metadata,
-        "allocation": config.allocation,
-        "measurement": "sampled engine inactivity estimate, not a CUDA kernel-gap trace",
-        "integration": "right-sample weighting over valid adjacent scrape intervals",
-        "attribution": "Declared exclusive worker GPUs"
-        if config.allocation == "exclusive"
-        else "Shared GPU correlation only; no ownership attribution",
-        "frames": len(frames),
-        "scrape_errors": {
-            source: sum(bool(f[source].error) for f in sources) for source in ("gpu", "serving")
-        },
-        "gpus": gpu_rows,
-        "serving": serving,
-        "findings": findings,
-        "timeline": timeline,
-        "limitations": [
-            "DCGM watch cadence/averaging may differ from scrape cadence; "
-            "subinterval gaps are invisible.",
-            "No source timestamp means exporter freshness cannot be proven.",
-            "Zeros from counter multiplexing can resemble idle; "
-            "verify DCGM metric groups on hardware.",
-            "Demand transitions and excessive endpoint skew remain unclassified.",
-            "Low tensor activity alone is not evidence of waste in memory-bound decoding.",
-            "Observations suggest tests, not causes or permission to change production.",
-        ],
+        "metrics": metrics,
+        "summary": summary,
+        "certification": certification,
+        "gemm_shapes": shapes,
+        "roofline": roofline,
+        "reports": reports,
+        "timeline": _timeline(raw["traceEvents"]),
+        "limitations": missing,
+        "status": "observed" if index.kernels else "unsupported",
     }
+
+
+def _nsys_analysis(path):
+    uri = path.resolve().as_uri() + "?mode=ro"
+    metrics = []
+    timeline = []
+    missing = []
+    with sqlite3.connect(uri, uri=True) as db:
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "CUPTI_ACTIVITY_KIND_KERNEL" not in tables:
+            missing.append("no CUPTI kernel table; GPU bottleneck attribution unsupported")
+        else:
+            count, total = db.execute(
+                "SELECT COUNT(*),SUM(end-start) FROM CUPTI_ACTIVITY_KIND_KERNEL"
+            ).fetchone()
+            metrics.extend(
+                [
+                    Metric("kernel_count", count, "calls", "vibesys:nsys").record(),
+                    Metric(
+                        "kernel_duration_sum",
+                        total / 1000 if total is not None else None,
+                        "us",
+                        "vibesys:nsys",
+                        unavailable_reason="no kernels" if total is None else None,
+                    ).record(),
+                ]
+            )
+            column = nsys._kernel_name_col(db)
+            if column and nsys._column_exists(db, "CUPTI_ACTIVITY_KIND_KERNEL", "deviceId"):
+                query = f'SELECT "{column}",start,end,deviceId FROM CUPTI_ACTIVITY_KIND_KERNEL'
+                rows = db.execute(query).fetchall()
+                devices = sorted({row[3] for row in rows})
+                for device in devices:
+                    kernels = [row for row in rows if row[3] == device]
+                    gaps, busy, idle = nsys._device_gaps(kernels, {})
+                    timeline.append(
+                        {
+                            "device": str(device),
+                            "kernel_union_busy_us": busy / 1000,
+                            "internal_gap_over_1us_us": idle / 1000,
+                            "gap_count_over_1us": len(gaps),
+                            "scope": "VibeSys device_gaps threshold >1us; excludes edges",
+                        }
+                    )
+        for table in (
+            "CUPTI_ACTIVITY_KIND_RUNTIME",
+            "CUPTI_ACTIVITY_KIND_MEMCPY",
+            "CUPTI_ACTIVITY_KIND_GRAPH_TRACE",
+        ):
+            if table not in tables:
+                missing.append("unavailable table: " + table)
+    args = argparse.Namespace(report=str(path), top=15, step=1)
+    commands = {
+        "kernels": nsys.cmd_kernels,
+        "cpu_overhead": nsys.cmd_cpu_overhead,
+        "idle_gaps": nsys.cmd_idle_gaps,
+        "memory": nsys.cmd_memory,
+        "graph_replays": nsys.cmd_graph_replays,
+        "step_timeline": nsys.cmd_step_timeline,
+    }
+    reports = {}
+    for name, command in commands.items():
+        try:
+            reports[name] = _report(nsys, command, args)
+        except (sqlite3.Error, ValueError, RuntimeError) as exc:
+            missing.append(f"{name} unavailable: {type(exc).__name__}")
+    observed = any(m["name"] == "kernel_count" and m["value"] for m in metrics)
+    return {
+        "metrics": metrics,
+        "reports": reports,
+        "timeline": timeline,
+        "limitations": missing,
+        "status": "observed" if observed else "unsupported",
+    }
+
+
+def analyze_trace(path: str | Path, profiler: str):
+    path = Path(path)
+    with _LOCK:
+        if profiler == "torch":
+            return _torch_analysis(path)
+        if profiler == "nsys":
+            return _nsys_analysis(path)
+        raise ValueError("profiler must be torch or nsys")
+
+
+def import_trace(
+    store: EvidenceStore,
+    identity,
+    path: str | Path,
+    *,
+    profiler: str,
+    worker: str,
+    capture_id: str | None = None,
+):
+    """Analyze a stable owned copy and store an explicitly worker-labelled profile."""
+    if worker not in identity.workers:
+        raise ValueError("worker is not declared in deployment identity")
+    path = Path(path)
+    raw_artifact = store.put_artifact(path)
+    # Exported artifacts use content-addressed names. Retain a public format hint,
+    # not the original filename, so downstream analyzers can restore required suffixes.
+    raw_artifact["format"] = (
+        "nsys_rep"
+        if path.suffix == ".nsys-rep"
+        else "chrome_trace_json_gzip"
+        if path.name.endswith(".gz")
+        else "nsys_sqlite"
+        if profiler == "nsys"
+        else "chrome_trace_json"
+    )
+    artifacts = [raw_artifact]
+    stored = store.root / raw_artifact["path"]
+    # Format suffix affects gzip parsing. Analyze in an isolated temporary directory.
+    with tempfile.TemporaryDirectory() as temp:
+        copy = Path(temp) / (
+            "trace.nsys-rep"
+            if path.suffix == ".nsys-rep"
+            else "trace.json.gz"
+            if path.name.endswith(".gz")
+            else "trace.json"
+        )
+        shutil.copyfile(stored, copy)
+        if path.suffix == ".nsys-rep":
+            if profiler != "nsys":
+                raise ValueError(".nsys-rep requires the nsys profiler")
+            nsys_exe = shutil.which("nsys")
+            if not nsys_exe:
+                raise RuntimeError(
+                    "nsys CLI is required to export .nsys-rep; import SQLite instead"
+                )
+            sqlite_path = Path(temp) / "trace.sqlite"
+            try:
+                subprocess.run(
+                    [nsys_exe, "export", "--type=sqlite", f"--output={sqlite_path}", str(copy)],
+                    check=True,
+                    capture_output=True,
+                    timeout=300,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError("Nsight export failed: " + type(exc).__name__) from exc
+            exported = store.put_artifact(sqlite_path)
+            exported["format"] = "nsys_sqlite"
+            artifacts.append(exported)
+            copy = sqlite_path
+        try:
+            result = analyze_trace(copy, profiler)
+        except Exception as exc:
+            store.event(
+                "trace_analysis_failed",
+                {"artifact": raw_artifact["digest"], "error": type(exc).__name__},
+            )
+            raise
+    record = {
+        "id": uuid.uuid4().hex,
+        "timestamp": time.time(),
+        "capture_id": capture_id,
+        "worker": worker,
+        "profiler": profiler,
+        "source": "vibesys_profiler",
+        "diagnostic": True,
+        "correctness": "not_evaluated",
+        "provenance": PROVENANCE,
+        "artifacts": artifacts,
+        **result,
+        "time_semantics": "Kernel duration sums include overlap; timeline union is separate. "
+        "Profiler results are diagnostic, not unprofiled serving latency.",
+    }
+    store.profile(identity, record)
+    return record

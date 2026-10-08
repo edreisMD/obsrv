@@ -1,8 +1,29 @@
-"""Public library interface; collection does not import a serving engine or CUDA."""
+"""Production evidence for the next serving optimization hypothesis."""
 
-from .analysis import analyze
-from .collector import collect_once
-from .config import Config, load_config
-from .store import Store
+from .activation import activate, deployment_settings
+from .analysis import analyze_trace, import_trace
+from .collector import Collector
+from .config import Config
+from .evidence import ProductionEvidenceBundle, build_bundle, export_context, report, verify_export
+from .models import Identity, Metric
+from .profiling import ProfileController
+from .store import EvidenceStore, StorageLimitError
 
-__all__ = ["Config", "Store", "analyze", "collect_once", "load_config"]
+__all__ = [
+    "activate",
+    "deployment_settings",
+    "Collector",
+    "Config",
+    "EvidenceStore",
+    "Identity",
+    "Metric",
+    "ProductionEvidenceBundle",
+    "ProfileController",
+    "StorageLimitError",
+    "analyze_trace",
+    "build_bundle",
+    "export_context",
+    "import_trace",
+    "report",
+    "verify_export",
+]

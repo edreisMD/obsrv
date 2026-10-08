@@ -1,20 +1,44 @@
 # Contributing
 
-Bug reports, metric fixtures and improvements to measurement accuracy are welcome.
+Obsrv is an experimental production profiling/evidence package. Changes should keep
+profiler evidence distinct from supplementary serving metrics, and preserve provenance,
+partial coverage and unavailable measurements.
 
-Use Python 3.11 or newer and `uv sync --frozen --dev`, then run `uv run pytest`,
-`uv run ruff check .`, `uv run ruff format --check .`, and `uv build`.
-The browser UI has no build step; syntax-check it with
-`node --check src/obsrv/web/app.js`.
+## Local setup
 
-Describe the deployment engine/version, metric names and labels, the expected
-measurement, and the observed result. Scrub endpoint credentials, deployment
-identifiers and private workload details from fixtures before posting them.
+From this repository's root:
 
-Changes to measurements should include a small fixture and a test showing
-coverage, missing values and attribution boundaries. Keep unknown values
-unknown; never turn a scrape failure into evidence of idle capacity. Dashboard
-changes should be checked at desktop and narrow widths.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e . --group dev
+python -m pytest
+python -m ruff check src tests scripts
+python -m ruff format --check src tests scripts
+python scripts/check_release.py
+```
 
-The project uses the MIT license. Open a GitHub issue to discuss substantial
-features before building them.
+Alternatively, `uv sync --locked` installs the package and development tools.
+Loopback HTTP tests need permission to bind a temporary local port. No GPU/model
+download is needed for the regular suite. Synthetic fixtures do not establish real
+serving compatibility; see docs/nvidia-validation.md before making that claim.
+
+Tests must pass from an isolated checkout. Optional reference-source parity tests can
+use `VIBESYS_REFERENCE_ROOT` pointing at the pinned upstream checkout; they skip if
+that separate checkout is absent. The regular suite also checks packaged analyzer
+hashes and synthetic reference measurements.
+
+## Changes and reviews
+
+- Include a regression test for behavior changes, especially identity boundaries,
+  capture ownership, unavailable data and artifact integrity.
+- Keep pure analysis separate from HTTP, file and process I/O.
+- Never claim trace certification establishes model correctness or official acceptance.
+- Changes to vendored analyzers need explicit provenance updates and parity validation.
+- Use synthetic, minimal fixtures. Never submit real traces, prompts, host information,
+  deployment configs, environment files, credentials or private model identifiers.
+- Do not paste server responses or authentication details into issues or CI logs.
+
+The CI workflow uses read-only repository permissions, runs no optimization agents
+and publishes no releases. Follow docs/releasing.md before publishing artifacts.

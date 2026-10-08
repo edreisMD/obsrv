@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/uw-syfi/vibesys",
+  "revision": "41dd0a8eb2db160c3ae43e4472401cd663f839e5",
+  "files": {
+    "torch/analyze_torch_profile.py": {
+      "source_sha256": "8e4743e75d450f6e545f79c5837ee5aeddc1de32b0897058349e33d675b2c23a",
+      "vendored_sha256": "930af16aea7fd9213ab3e6be8120c94149d318774bf287700cfb73dc319eee99"
+    },
+    "nsys/analyze_nsys.py": {
+      "source_sha256": "23d7d0a51185c854e9ecbb5db5624521bc671c5673222aeef38123d2618d85a9",
+      "vendored_sha256": "fd4f4735a3bb83373e9a380c0fbe57bac5568001caa0bb7b50539a6f3b1d8e22"
+    }
+  }
+}
