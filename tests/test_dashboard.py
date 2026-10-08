@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from serve_observe.benchmarks import paired_benchmark, read_benchmarks
-from serve_observe.cli import main
-from serve_observe.config import GPU, Config
-from serve_observe.dashboard import Dashboard
-from serve_observe.demo import demo_frames
-from serve_observe.local import local_sample
-from serve_observe.store import Store
+from obsrv.benchmarks import paired_benchmark, read_benchmarks
+from obsrv.cli import main
+from obsrv.config import GPU, Config
+from obsrv.dashboard import Dashboard
+from obsrv.demo import demo_frames
+from obsrv.local import local_sample
+from obsrv.store import Store
 
 
 def artifact(**overrides):
@@ -117,7 +117,7 @@ def test_demo_cannot_mix_with_real_telemetry():
 def test_packaged_assets_exist_and_do_not_load_external_cdn():
     from importlib.resources import files
 
-    web = files("serve_observe").joinpath("web")
+    web = files("obsrv").joinpath("web")
     html = web.joinpath("index.html").read_text()
     assert 'src="/app.js"' in html
     assert "https://" not in html

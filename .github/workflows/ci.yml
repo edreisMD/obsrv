@@ -13,5 +13,5 @@ jobs:
       - run: uv run --frozen ruff check .
       - run: uv run --frozen ruff format --check .
       - run: uv run --frozen pytest
-      - run: node --check src/serve_observe/web/app.js
+      - run: node --check src/obsrv/web/app.js
       - run: uv build

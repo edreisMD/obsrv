@@ -12,7 +12,7 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 def fetch(url, timeout):
-    request = Request(url, headers={"Accept": "text/plain", "User-Agent": "serve-observe/0.1"})
+    request = Request(url, headers={"Accept": "text/plain", "User-Agent": "obsrv/0.1"})
     with urlopen(request, timeout=timeout) as response:
         body = response.read(MAX_RESPONSE_BYTES + 1)
     if len(body) > MAX_RESPONSE_BYTES:

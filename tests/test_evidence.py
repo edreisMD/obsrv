@@ -5,12 +5,12 @@ from threading import Thread
 
 import pytest
 
-from serve_observe import Config, Store, analyze, collect_once, load_config
-from serve_observe.cli import main
-from serve_observe.config import GPU
-from serve_observe.demo import demo_frames
-from serve_observe.metrics import GPU_METRICS, Sample, counter_delta, gauge, parse_metrics
-from serve_observe.trace import trace_gaps
+from obsrv import Config, Store, analyze, collect_once, load_config
+from obsrv.cli import main
+from obsrv.config import GPU
+from obsrv.demo import demo_frames
+from obsrv.metrics import GPU_METRICS, Sample, counter_delta, gauge, parse_metrics
+from obsrv.trace import trace_gaps
 
 
 @pytest.fixture

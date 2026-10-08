@@ -5,7 +5,7 @@ Bug reports, metric fixtures and improvements to measurement accuracy are welcom
 Use Python 3.11 or newer and `uv sync --frozen --dev`, then run `uv run pytest`,
 `uv run ruff check .`, `uv run ruff format --check .`, and `uv build`.
 The browser UI has no build step; syntax-check it with
-`node --check src/serve_observe/web/app.js`.
+`node --check src/obsrv/web/app.js`.
 
 Describe the deployment engine/version, metric names and labels, the expected
 measurement, and the observed result. Scrub endpoint credentials, deployment

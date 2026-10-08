@@ -170,7 +170,7 @@ def serve(
         local_monitor=local_monitor,
         journal=journal,
     )
-    assets = files("serve_observe").joinpath("web")
+    assets = files("obsrv").joinpath("web")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -211,7 +211,7 @@ def serve(
     if local_monitor:
         thread = threading.Thread(target=app.monitor, daemon=True)
         thread.start()
-    print(f"serve-observe dashboard: http://127.0.0.1:{server.server_port}", flush=True)
+    print(f"obsrv dashboard: http://127.0.0.1:{server.server_port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

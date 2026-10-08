@@ -120,7 +120,7 @@ def main(argv=None):
                 _write_json(args.out, {**analyze(config, frames), **identity})
         return 0
     except (ValueError, OSError, KeyError, TypeError) as exc:
-        print(f"serve-observe: {exc}", file=sys.stderr)
+        print(f"obsrv: {exc}", file=sys.stderr)
         return 2
 
 

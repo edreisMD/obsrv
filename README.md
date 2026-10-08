@@ -1,4 +1,4 @@
-# serve-observe
+# obsrv
 
 **See whether an inference change actually improves performance.**
 
@@ -11,7 +11,7 @@ and keep a readable history of your optimization experiments.
 ## Why use it?
 
 A busy GPU does not always mean a faster service. A faster benchmark does not
-explain where the gain came from. serve-observe brings the evidence together:
+explain where the gain came from. obsrv brings the evidence together:
 
 - **Compare before and after.** View paired latency, output throughput and the
   producer's correctness result side by side.
@@ -29,15 +29,15 @@ explain where the gain came from. serve-observe brings the evidence together:
 Requires Python 3.11 or newer.
 
 ```bash
-pip install git+https://github.com/edreisMD/serve-observe.git
-serve-observe dashboard --demo
+pip install git+https://github.com/edreisMD/obsrv.git
+obsrv dashboard --demo
 ```
 
 Open **http://127.0.0.1:8765**. The demo uses clearly labeled synthetic data to
 show two deployment captures and an experiment history. It is an example of the
 interface, not a performance claim.
 
-Browse the [four-slide overview](docs/serve-observe-overview.pptx) for a walkthrough
+Browse the [four-slide overview](docs/obsrv-overview.pptx) for a walkthrough
 of the dashboard, deployment comparisons and experiment history.
 
 ## Monitor vLLM or SGLang
@@ -49,17 +49,17 @@ of the dashboard, deployment comparisons and experiment history.
 4. Collect a capture while your fixed workload runs:
 
 ```bash
-serve-observe collect --config worker.toml --db baseline.sqlite --duration 120
-serve-observe collect --config candidate.toml --db candidate.sqlite --duration 120
-serve-observe dashboard --db baseline.sqlite --db candidate.sqlite
+obsrv collect --config worker.toml --db baseline.sqlite --duration 120
+obsrv collect --config candidate.toml --db candidate.sqlite --duration 120
+obsrv dashboard --db baseline.sqlite --db candidate.sqlite
 ```
 
 The dashboard can read an active capture while collection continues. Every
 capture stays available for reporting:
 
 ```bash
-serve-observe report --db candidate.sqlite --out report.json
-serve-observe export --db candidate.sqlite --out samples.jsonl
+obsrv report --db candidate.sqlite --out report.json
+obsrv export --db candidate.sqlite --out samples.jsonl
 ```
 
 ## Watch optimization results
@@ -68,7 +68,7 @@ Have your benchmark write paired result files using the
 [documented JSON format](docs/benchmarks.md), then watch the directory:
 
 ```bash
-serve-observe dashboard --benchmark-dir ./results
+obsrv dashboard --benchmark-dir ./results
 ```
 
 New results appear automatically. Speedups are recomputed from paired timings,
@@ -79,7 +79,7 @@ improvement. Correctness flags are supplied by the benchmark producer.
 On Apple Silicon you can also record available system-wide GPU counters:
 
 ```bash
-serve-observe dashboard --benchmark-dir ./results --monitor-local \
+obsrv dashboard --benchmark-dir ./results --monitor-local \
   --journal ./local-telemetry.jsonl
 ```
 
@@ -96,7 +96,7 @@ stale, duplicate or missing metrics remain unknown; outages reduce coverage.
 For detailed investigations, analyze an existing Chrome/PyTorch GPU trace:
 
 ```bash
-serve-observe trace --input trace.json --device 0 \
+obsrv trace --input trace.json --device 0 \
   --start-us 1000000 --end-us 2000000 --out trace-gaps.json
 ```
 
@@ -107,7 +107,7 @@ under correctness and latency constraints; utilization alone is not a reward.
 ## Python library
 
 ```python
-from serve_observe import Store, analyze
+from obsrv import Store, analyze
 
 with Store("capture.sqlite", readonly=True) as store:
     config, frames, identity = store.read()
@@ -124,8 +124,8 @@ reads. Real NVIDIA deployments still need hardware validation. Metrics and
 scheduler labels vary by engine release; check your `/metrics` output.
 
 ```bash
-git clone https://github.com/edreisMD/serve-observe.git
-cd serve-observe
+git clone https://github.com/edreisMD/obsrv.git
+cd obsrv
 uv sync --frozen --dev
 uv run pytest
 uv run ruff check .
