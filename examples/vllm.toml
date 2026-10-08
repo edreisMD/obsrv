@@ -1,0 +1,28 @@
+deployment = "coding-worker-0"
+engine = "vllm"
+serving_url = "http://127.0.0.1:8000/metrics"
+dcgm_url = "http://127.0.0.1:9400/metrics"
+allocation = "exclusive"
+interval_seconds = 1.0
+timeout_seconds = 2.0
+max_gap_seconds = 3.0
+join_tolerance_seconds = 0.5
+low_activity_threshold = 0.1
+
+# Match one worker/engine. Add engine/rank labels only if exported by your version.
+[serving_labels]
+model_name = "YOUR-SERVED-MODEL-NAME"
+
+# Use the UUID from DCGM /metrics. Declare every TP GPU once.
+[[gpus]]
+id = "worker-0-gpu-0"
+labels = { UUID = "GPU-REPLACE-ME" }
+
+# Useful for matching controlled before/after experiments. Values are declarations.
+[metadata]
+workload_sha256 = "REPLACE-WITH-IMMUTABLE-REPLAY-HASH"
+candidate_revision = "REPLACE-WITH-GIT-COMMIT"
+model_revision = "REPLACE-WITH-MODEL-REVISION"
+engine_version = "REPLACE-WITH-VLLM-VERSION"
+hardware = "REPLACE-WITH-GPU-SKU-AND-COUNT"
+precision = "REPLACE-WITH-PRECISION"

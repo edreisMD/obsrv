@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>serve-observe · Inference evidence</title>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">serve<span>—</span>observe</a>
+    <nav><a href="#compare">Comparison</a><a href="#history">Experiments</a><a href="#hardware">Hardware</a></nav>
+    <div class="connection"><span id="live-dot"></span><span id="connection">Connecting</span></div>
+  </header>
+  <main>
+    <section class="intro">
+      <div><div class="eyebrow">INFERENCE / PERFORMANCE EVIDENCE</div>
+        <h1>See what your changes<br>actually improve.</h1>
+        <p>Compare deployments. Find idle capacity. Keep the evidence behind every result.</p></div>
+      <div class="mode-box"><span id="mode" class="badge">LOCAL</span><p id="mode-description">Reading retained measurements.</p>
+        <button id="pause" type="button">Pause updates</button><button id="download" type="button">Export evidence ↓</button></div>
+    </section>
+    <div id="notice" role="status"></div>
+    <section id="compare" class="section">
+      <div class="section-head"><div><span class="eyebrow">01 / PAIRED COMPARISON</span><h2>Baseline vs candidate</h2></div>
+        <label>Experiment <select id="experiment"><option>No benchmark files yet</option></select></label></div>
+      <div id="outcome" class="outcome"></div>
+      <div class="comparison"><article class="deployment baseline" id="baseline"></article>
+        <article class="deployment candidate" id="candidate"></article></div>
+      <div class="chart-panel"><div class="chart-heading"><h3>Inference latency across paired trials</h3>
+        <div class="legend"><span class="blue-key">Baseline</span><span class="teal-key">Candidate</span></div></div>
+        <div id="latency-chart" class="chart"></div><p class="caption">Model execution latency, seconds. Trials are repetitions, not independent experiment runs.</p></div>
+      <p id="scope" class="scope"></p>
+    </section>
+    <section id="history" class="section">
+      <div class="section-head"><div><span class="eyebrow">02 / OPTIMIZATION HISTORY</span><h2>Every change leaves a trail</h2></div>
+        <span class="muted">Results ordered by artifact modification time</span></div>
+      <div class="chart-panel"><div class="chart-heading"><h3>Paired speedup by experiment</h3><span class="muted">Higher is faster · 1× is parity</span></div>
+        <div id="history-chart" class="chart"></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Experiment</th><th>Paired speedup</th><th>Latency reduction</th><th>Trials</th><th>Correctness</th></tr></thead><tbody id="experiments"></tbody></table></div>
+      <p class="caption">Each point compares a candidate with its own paired baseline. This is not cumulative gain. Failed or unverified results remain visible.</p>
+    </section>
+    <section id="captures" class="section">
+      <div class="section-head"><div><span class="eyebrow">03 / DEPLOYMENT TELEMETRY</span><h2>Idle with work waiting?</h2></div></div>
+      <div class="selectors"><label>Baseline capture <select id="capture-a"></select></label><label>Candidate capture <select id="capture-b"></select></label></div>
+      <div class="comparison"><article class="deployment baseline" id="telemetry-a"></article><article class="deployment candidate" id="telemetry-b"></article></div>
+      <div class="chart-panel"><div class="chart-heading"><h3>GPU engine activity</h3><span class="muted">Elapsed capture time · all configured GPUs averaged per sample</span></div><div id="activity-chart" class="chart"></div></div>
+      <p class="caption">Inactivity is estimated from DCGM interval averages. Demand is correlated, not causally attributed. Missing intervals reduce coverage; they are never counted as idle.</p>
+    </section>
+    <section id="hardware" class="section">
+      <div class="section-head"><div><span class="eyebrow">04 / LOCAL MONITOR</span><h2>What the host is doing now</h2></div><span id="host-status" class="badge"></span></div>
+      <div class="host-summary" id="host-summary"></div>
+      <div class="chart-panel"><div class="chart-heading"><h3>Apple GPU activity</h3><span class="muted">System-wide · last 10 minutes</span></div><div id="host-chart" class="chart"></div></div>
+      <p class="caption">Apple driver telemetry includes all applications. It does not measure per-process GPU idle time or NVIDIA DCGM activity.</p>
+    </section>
+    <footer><strong>Evidence before conclusions.</strong><span>Optimize useful work under your latency and correctness constraints.</span><span id="updated"></span></footer>
+  </main>
+</body>
+</html>

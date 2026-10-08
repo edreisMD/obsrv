@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "serve-observe"
+version = "0.1.0"
+description = "GPU activity and inference-demand evidence for deployment optimization agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = ["prometheus-client>=0.20,<1"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"]
+
+[project.urls]
+Repository = "https://github.com/edreisMD/serve-observe"
+Issues = "https://github.com/edreisMD/serve-observe/issues"
+
+[project.scripts]
+serve-observe = "serve_observe.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/serve_observe"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
