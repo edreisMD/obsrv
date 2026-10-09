@@ -1,142 +1,273 @@
 # obsrv
 
-**See whether an inference change actually improves performance.**
+**Production profiling evidence for the next optimization of your AI serving stack.**
 
-A small, self-hosted observability library and dashboard for AI inference deployments.
-Compare a baseline with a candidate, see GPU activity alongside request demand,
-and keep a readable history of your optimization experiments.
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Status](https://img.shields.io/badge/status-experimental%20alpha-orange)](docs/validation.md)
 
-![Dashboard showing deployment comparisons and experiment history](docs/images/dashboard.jpg)
+Obsrv attaches to a **vLLM or SGLang deployment**, captures its runtime behavior,
+and exports evidence that an optimization agent can use to develop its next hypothesis.
+It brings VibeSys's profiling analysis to deployed inference servers.
 
-## Why use it?
+Instead of optimizing only against isolated experiments, observe what the deployed
+implementation actually does under its application workload. Use that evidence to
+choose the next experiment, then validate the change before deploying it.
 
-A busy GPU does not always mean a faster service. A faster benchmark does not
-explain where the gain came from. obsrv brings the evidence together:
-
-- **Compare before and after.** View paired latency, output throughput and the
-  producer's correctness result side by side.
-- **Find idle capacity.** See estimated GPU engine inactivity together with
-  running and waiting requests.
-- **Track experiments.** Plot measured results across successive code or
-  deployment changes, including regressions and unverified results.
-- **Give agents useful evidence.** Export structured reports and retained
-  samples for an optimizer, notebook or CI pipeline.
-- **Keep data local.** SQLite captures, JSON exports and a browser dashboard;
-  no hosted service or account required.
-
-## Try the dashboard
-
-Requires Python 3.11 or newer.
-
-```bash
-pip install git+https://github.com/edreisMD/obsrv.git
-obsrv dashboard --demo
+```mermaid
+flowchart LR
+    A[Deployed vLLM / SGLang] --> B[obsrv]
+    B --> C[Profiler reports + evidence bundle]
+    C -. Planned integration .-> D[Optimization agent]
+    D --> E[Controlled validation]
+    E --> A
 ```
 
-Open **http://127.0.0.1:8765**. The demo uses clearly labeled synthetic data to
-show two deployment captures and an experiment history. It is an example of the
-interface, not a performance claim.
+> **Experimental alpha:** local package and HTTP protocol tests pass. Real NVIDIA
+> deployment compatibility and collection/profiling overhead still need validation.
+> VibeSys hypothesis-loading integration is planned, not implemented.
 
-Browse the [four-slide overview](docs/obsrv-overview.pptx) for a walkthrough
-of the dashboard, deployment comparisons and experiment history.
+## What you get
 
-## Monitor vLLM or SGLang
+- **VibeSys profiler analysis:** kernel/operator costs, CPU/GPU overhead, memory
+  operations, trace certification, correlated GEMM shapes and available roofline analysis.
+- **Explicit capture windows:** start and stop the engine's native PyTorch profiler
+  without injecting code, restarting the server or generating synthetic requests.
+- **Nsight Systems imports:** analyze existing kernel, launch/synchronization, GPU-gap,
+  memory and CUDA graph replay evidence.
+- **Portable evidence:** complete JSON records, a compact agent-context summary,
+  trace artifacts and a SHA256 integrity manifest.
+- **Optional continuous context:** serving latency/throughput/queue/cache metrics and
+  explicitly configured DCGM telemetry. These supplement the profiler evidence.
 
-1. Run NVIDIA DCGM Exporter on the GPU host and enable the engine activity field.
-2. Expose the serving metrics endpoint. SGLang requires `--enable-metrics`.
-3. Copy `examples/vllm.toml` or `examples/sglang.toml`. Set the endpoint URLs,
-   actual exported scheduler labels, and GPU UUIDs assigned to one worker.
-4. Collect a capture while your fixed workload runs:
+Obsrv is a headless SDK and CLI. It is not a dashboard, an inference engine, or an
+agent that edits/deploys code. Production observations guide hypotheses; they do not
+prove a speedup or replace correctness and controlled performance tests.
 
-```bash
-obsrv collect --config worker.toml --db baseline.sqlite --duration 120
-obsrv collect --config candidate.toml --db candidate.sqlite --duration 120
-obsrv dashboard --db baseline.sqlite --db candidate.sqlite
-```
+## Install
 
-The dashboard can read an active capture while collection continues. Every
-capture stays available for reporting:
-
-```bash
-obsrv report --db candidate.sqlite --out report.json
-obsrv export --db candidate.sqlite --out samples.jsonl
-```
-
-## Watch optimization results
-
-Have your benchmark write paired result files using the
-[documented JSON format](docs/benchmarks.md), then watch the directory:
+Requires **Python 3.11+**. Install from `main` in a separate environment:
 
 ```bash
-obsrv dashboard --benchmark-dir ./results
+python3 -m venv .obsrv-venv
+source .obsrv-venv/bin/activate
+python -m pip install "git+https://github.com/edreisMD/obsrv.git@main"
+obsrv --help
 ```
 
-New results appear automatically. Speedups are recomputed from paired timings,
-not copied from an advertised score. Each point compares that experiment with
-its own reference; history is not a claim of cumulative or statistically proven
-improvement. Correctness flags are supplied by the benchmark producer.
-
-On Apple Silicon you can also record available system-wide GPU counters:
+Or clone it to inspect/edit the source:
 
 ```bash
-obsrv dashboard --benchmark-dir ./results --monitor-local \
-  --journal ./local-telemetry.jsonl
+git clone --branch main https://github.com/edreisMD/obsrv.git
+cd obsrv
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
 ```
 
-Apple activity is labeled separately from DCGM. It includes other applications
-and cannot attribute GPU idle time to one inference process.
+The `main` branch contains the production profiler. The earlier dashboard is retained
+in Git history and in the local archived package.
+This project has **not been published on PyPI**; do not assume `pip install obsrv`
+installs this package. The collector itself does not require PyTorch or CUDA.
+The serving engine needs a supported NVIDIA/CUDA environment for live GPU captures.
 
-## Useful measurements, honest limits
+Install the serving engine using its own [vLLM](https://docs.vllm.ai/en/stable/getting_started/installation/gpu/)
+or [SGLang](https://docs.sglang.ai/get_started/install.html) installation guide.
+The engine and collector can run in separate environments or containers.
 
-DCGM engine inactivity is an **estimate from interval averages**. It distinguishes
-idle correlated with no demand from idle correlated with running or queued work.
-It does not explain the cause or expose microsecond kernel gaps. Unsupported,
-stale, duplicate or missing metrics remain unknown; outages reduce coverage.
+For a first cluster trial and manual VibeSys handoff, see the
+[friend quickstart](docs/friend-quickstart.md).
 
-For detailed investigations, analyze an existing Chrome/PyTorch GPU trace:
+## Quickstart with vLLM
+
+Use vLLM **0.13 or later** with the native `--profiler-config` interface.
+Run these terminals on the same host. For separate containers, use a shared trace
+volume and a reachable private serving address as described in the deployment guide. Choose your own model; `YOUR_MODEL` is a placeholder.
+
+**Terminal 1 — launch the server in your vLLM environment:**
 
 ```bash
-obsrv trace --input trace.json --device 0 \
-  --start-us 1000000 --end-us 2000000 --out trace-gaps.json
+export MODEL=YOUR_MODEL
+export PROFILE_DIR=/tmp/obsrv-vllm-profiles
+mkdir -p "$PROFILE_DIR"
+
+vllm serve "$MODEL" --host 127.0.0.1 --port 8000 \
+  --profiler-config "{\"profiler\":\"torch\",\"torch_profiler_dir\":\"$PROFILE_DIR\",\"torch_profiler_record_shapes\":true,\"torch_profiler_with_memory\":true,\"torch_profiler_with_stack\":false}"
 ```
 
-See [measurement details](docs/measurements.md) and the
-[experiment workflow](docs/agent-loop.md). Optimize useful throughput or cost
-under correctness and latency constraints; utilization alone is not a reward.
+**Terminal 2 — activate obsrv in its environment:**
 
-## Python library
+```bash
+obsrv activate --engine vllm --url http://127.0.0.1:8000 \
+  --deployment coding-vllm --trace-dir /tmp/obsrv-vllm-profiles
+```
+
+Activation discovers the advertised model and available engine version, saves the
+configuration and starts passive collection in the foreground. Add `--revision`
+with the deployed code commit or image digest to identify the implementation precisely.
+Deep profiling starts only when you request it.
+
+**Terminal 3 — while your application is sending traffic:**
+
+```bash
+obsrv profile --deployment coding-vllm --duration 30
+obsrv report --deployment coding-vllm
+obsrv export-context --deployment coding-vllm
+```
+
+The profiler analyzes the application traffic present in that window. An idle server
+cannot produce meaningful GPU bottleneck evidence. Profiling perturbs serving; use
+an appropriate diagnostic window and inspect trace certification before drawing conclusions.
+See the engine's [profiling guide](https://docs.vllm.ai/en/stable/contributing/profiling/).
+
+## Quickstart with SGLang
+
+**Terminal 1 — launch the server in your SGLang environment:**
+
+```bash
+export MODEL=YOUR_MODEL
+export SGLANG_TORCH_PROFILER_DIR=/tmp/obsrv-sglang-profiles
+mkdir -p "$SGLANG_TORCH_PROFILER_DIR"
+
+python -m sglang.launch_server --model-path "$MODEL" \
+  --host 127.0.0.1 --port 30000 --enable-metrics
+```
+
+**Terminal 2 — activate obsrv:**
+
+```bash
+obsrv activate --engine sglang --url http://127.0.0.1:30000 \
+  --deployment coding-sglang --trace-dir /tmp/obsrv-sglang-profiles
+```
+
+**Terminal 3 — capture application traffic and export evidence:**
+
+```bash
+obsrv profile --deployment coding-sglang --duration 30
+obsrv report --deployment coding-sglang
+obsrv export-context --deployment coding-sglang
+```
+
+Obsrv requests CPU/GPU activities and input shapes through SGLang's native profiling
+endpoints, disables stack recording and keeps each capture's output separate.
+Use an engine version supporting these request fields. See SGLang's
+[profiling guide](https://docs.sglang.ai/developer_guide/benchmark_and_profiling.html).
+
+## Understand the output
+
+`export-context` prints the path to a self-contained export directory:
+
+```text
+exports/<bundle-id>/
+├── bundle.json       # complete deployment, observation and profiler records
+├── context.md        # agent-context summary, capped at 16,384 characters
+├── manifest.json     # bundle, summary and artifact SHA256 hashes
+└── artifacts/        # exact captured trace bytes, addressed by SHA256
+```
+
+```bash
+obsrv verify /path/to/export
+```
+
+The generated `ProductionEvidenceBundle` uses VibeSys-style metric and artifact-digest
+conventions. It is **not** VibeSys `TrustedEvidence`; correctness and official gate
+acceptance remain `not_evaluated`. The future hypothesis importer must validate and
+bind production observations to the candidate being optimized.
+
+Automatic discovery does not attest code identity or distributed topology. Revision
+starts as `unknown` unless supplied; workers start as `unattributed`. A capture may
+return `partial` (exit code 2) while still preserving useful traces. Configure real
+worker identities and trace patterns before claiming complete worker coverage.
+
+Kernel duration sums can exceed elapsed time because GPU streams overlap. Obsrv keeps
+per-device interval unions separate. Production cohorts are not paired benchmarks,
+and profiled latency is not an unprofiled serving-performance measurement.
+
+## Commands at a glance
+
+| Command | Purpose |
+| --- | --- |
+| `activate --engine … --url … --deployment …` | Discover, configure and start passive collection |
+| `deployment-settings --engine … --trace-dir …` | Print launch settings without launching a model |
+| `collect --deployment …` | Resume collection using the saved configuration |
+| `profile --deployment … --duration 30` | Capture and analyze an explicit profiling window |
+| `profile --deployment … --recover CAPTURE_ID` | Recover an interrupted owned capture |
+| `import --deployment … --profiler torch\|nsys --worker … FILE` | Analyze an existing trace |
+| `report --deployment … --all-versions` | Inspect separate version cohorts |
+| `export-context --deployment …` | Export complete evidence and compact context |
+| `verify EXPORT_DIR` | Verify an export's integrity |
+
+Run named-deployment commands from the **same working directory as activation**.
+Otherwise use the absolute `--config` path printed by activation. `activate --setup-only`
+saves configuration without collecting; `--count 2` performs a finite collection check.
+
+## SDK
 
 ```python
-from obsrv import Store, analyze
+from obsrv import Config, Collector, EvidenceStore, ProfileController, export_context
 
-with Store("capture.sqlite", readonly=True) as store:
-    config, frames, identity = store.read()
-    report = {**analyze(config, frames), **identity}
+config = Config.load("/path/to/obsrv.json")
+store = EvidenceStore(
+    config.state_dir,
+    retention_days=config.retention_days,
+    max_bytes=config.max_storage_bytes,
+)
+try:
+    Collector(config, store).collect_once()  # passive
+    ProfileController(config, store).capture(duration_seconds=30)  # explicit diagnostic
+    export_dir = export_context(store, config.identity)
+finally:
+    store.close()
 ```
 
-The collector runs outside the inference request path. It does not import a
-serving engine, change clocks, route requests or modify your deployment.
+## Deployment and privacy
 
-## Status and contributing
+Run an adjacent process/sidecar against **one deployment's internal admin endpoint**,
+not a load balancer that can route start and stop to different replicas. Use a shared
+trace volume and state/lock volume. If the server and collector mount paths differ,
+set `server_trace_dir` for SGLang; vLLM must write into the configured shared volume.
 
-Alpha. Tested with synthetic/local HTTP exporters and real Apple driver counter
-reads. Real NVIDIA deployments still need hardware validation. Metrics and
-scheduler labels vary by engine release; check your `/metrics` output.
+Data stays local. Obsrv submits no prompts/completions and uploads no evidence to a
+cloud service. Tokens are referenced through `--auth-env ENV_VAR`, never embedded in
+URLs or stored in exports. Raw engine traces are preserved exactly and may contain
+engine-generated names, annotations or paths: **exports are not automatically redacted**.
+Review them before sharing, and keep runtime state out of Git.
+
+Default record retention is 7 days with a 5-GiB data budget. Exports are preserved;
+quota exhaustion pauses new data writes. Trace flushing has a separate timeout and
+may outlast the active profiling window. Recovery is explicit after an ambiguous stop.
+
+| Guide | Details |
+| --- | --- |
+| [Deployment guide](docs/deployment.md) | Existing servers, auth, workers, containers, recovery and optional metrics |
+| [Profiler contract](docs/profiler-contract.md) | Exact VibeSys measurements, limitations and source provenance |
+| [VibeSys integration](docs/vibesys-integration.md) | Evidence contract and future hypothesis-loading boundary |
+| [Privacy](docs/privacy.md) | Local storage, sharing and publication exclusions |
+| [Validation](docs/validation.md) | What has been tested and what has not |
+| [NVIDIA validation](docs/nvidia-validation.md) | Opt-in validation on real serving engines |
+
+## Development
 
 ```bash
-git clone https://github.com/edreisMD/obsrv.git
-cd obsrv
-uv sync --frozen --dev
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
-uv build
+python -m pip install --upgrade pip
+python -m pip install -e . --group dev
+python -m pytest
+python -m ruff check src tests scripts
+python -m ruff format --check src tests scripts
+python scripts/check_release.py
 ```
 
-The dashboard binds to loopback only and is intended for local use. Metrics
-labels, endpoint URLs and supplied metadata may contain deployment information;
-review exports before sharing them. Long captures should be rotated; reporting
-currently reads a complete run into memory. The local telemetry journal is
-bounded and keeps one rotated file.
+The dependency-group install requires a recent pip; alternatively use `uv sync --locked`.
+CI checks Python 3.11–3.14 on Linux, builds distributions and audits their contents.
+GPU tests are opt-in and are not run by this CPU-only CI.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [release checklist](docs/releasing.md).
 
-**MIT licensed.** Contributions, real deployment fixtures and bug reports are welcome.
+## Attribution
+
+Obsrv uses the MIT-licensed profiling analyzers from
+[VibeSys](https://github.com/uw-syfi/vibesys), pinned at revision
+`41dd0a8eb2db160c3ae43e4472401cd663f839e5`. Original notices and source/packaged hashes
+are retained in [`src/obsrv/_vendor`](src/obsrv/_vendor). Analysis is adapted for a
+standalone package; VibeSys orchestration is not bundled.
+
+[MIT license](LICENSE).

@@ -1,0 +1,39 @@
+# Same-host or sidecar deployment. URLs are never included in evidence exports.
+serving_url = "http://127.0.0.1:8000"
+trace_dir = "/shared/profiles"
+state_dir = "./state"
+interval_seconds = 5.0
+request_timeout_seconds = 5.0
+flush_timeout_seconds = 900.0
+retention_days = 7.0
+max_storage_bytes = 5368709120
+max_gap_seconds = 15.0
+# auth_env = "SERVING_ADMIN_TOKEN"
+# server_trace_dir = "/profiles" # SGLang server-side mount, if different
+# dcgm_url = "http://127.0.0.1:9400/metrics" # Optional; requires explicit selectors
+# gpu_selectors = [{UUID = "GPU-REPLACE-WITH-REAL-UUID"}]
+
+[serving_labels]
+model_name = "YOUR_MODEL"
+
+[trace_patterns]
+# Example only: inspect your engine's real filenames and map every rank explicitly.
+rank0 = "**/*TP-0*.trace.json.gz"
+rank1 = "**/*TP-1*.trace.json.gz"
+
+[identity]
+deployment = "coding"
+revision = "YOUR_CODE_COMMIT_OR_CONTAINER_DIGEST"
+engine = "sglang"
+engine_version = "YOUR_INSTALLED_VERSION"
+model = "YOUR_MODEL"
+workers = ["rank0", "rank1"]
+
+[identity.configuration]
+topology_verified = true
+dtype = "bfloat16"
+tensor_parallel_size = 2
+
+[identity.hardware]
+gpu = "YOUR_GPU"
+count = 2

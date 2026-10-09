@@ -1,0 +1,11 @@
+# Synthetic protocol fixture, not production measurements.
+# TYPE vllm:generation_tokens counter
+vllm:generation_tokens_total{model_name="test/model"} 100
+# TYPE vllm:prompt_tokens counter
+vllm:prompt_tokens_total{model_name="test/model"} 200
+# TYPE vllm:e2e_request_latency_seconds histogram
+vllm:e2e_request_latency_seconds_bucket{model_name="test/model",le="1"} 50
+vllm:e2e_request_latency_seconds_bucket{model_name="test/model",le="2"} 90
+vllm:e2e_request_latency_seconds_bucket{model_name="test/model",le="+Inf"} 100
+vllm:e2e_request_latency_seconds_count{model_name="test/model"} 100
+vllm:e2e_request_latency_seconds_sum{model_name="test/model"} 140

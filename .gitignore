@@ -1,9 +1,45 @@
+# Environments, builds and tooling caches
 .venv/
+venv/
 __pycache__/
+*.py[cod]
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
 dist/
-*.sqlite*
-artifacts/
+build/
+*.egg-info/
+.DS_Store
 
-.chart-data-*/
+# Local deployment state and exports. Never publish actual serving observations.
+.obsrv/
+state/
+artifacts/
+traces/
+exports/
+logs/
+obsrv.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.nsys-rep
+*.pt.trace.json
+*.pt.trace.json.gz
+*.trace.json
+*.trace.json.gz
+*.log
+*.pid
+
+# Credentials and machine/container overrides
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.credentials
+config.local.*

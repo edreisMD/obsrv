@@ -1,57 +1,114 @@
-"""Bounded concurrent HTTP scrapes. A failure is recorded, never converted to zero."""
+"""Passive collection; no profile is triggered by this collector."""
 
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-from .metrics import GPU_METRICS, parse_metrics, serving_metrics
-
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+from .config import Config
+from .http import HttpTransport, Transport
+from .metrics import GPU_NAMES, derive, gauge, parse, serving_names
+from .models import Metric
+from .store import EvidenceStore
 
 
-def fetch(url, timeout):
-    request = Request(url, headers={"Accept": "text/plain", "User-Agent": "obsrv/0.1"})
-    with urlopen(request, timeout=timeout) as response:
-        body = response.read(MAX_RESPONSE_BYTES + 1)
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise ValueError("Metrics response exceeds 8 MiB limit")
-    return body.decode("utf-8")
+class Collector:
+    def __init__(self, config: Config, store: EvidenceStore, transport: Transport | None = None):
+        self.config = config
+        self.store = store
+        self.transport = transport or HttpTransport(config.auth_env)
+        self.gpu_transport = HttpTransport()
+        self.previous = None
+        self.previous_time = None
+        self.previous_identity = None
 
+    def reconfigure(self, config: Config):
+        if config.serving_url != self.config.serving_url or config.auth_env != self.config.auth_env:
+            self.previous = None
+            self.transport = HttpTransport(config.auth_env)
+        self.config = config
 
-@dataclass(frozen=True)
-class Scrape:
-    source: str
-    started_ns: int
-    ended_ns: int
-    wall_time_ns: int
-    samples: tuple
-    error: str | None = None
-
-    def record(self):
-        result = asdict(self)
-        result["samples"] = [s.record() for s in self.samples]
-        return result
-
-
-def collect_once(config, *, fetcher=fetch):
-    def scrape(source, url, names):
-        start = time.monotonic_ns()
+    def collect_once(self, *, now=None):
+        config = self.config
+        now = time.time() if now is None else now
+        names = serving_names(config.identity.engine)
+        coverage = []
         try:
-            text = fetcher(url, config.timeout_seconds)
-            wall = time.time_ns()
-            samples = parse_metrics(text, names, wall / 1e9, config.max_gap_seconds)
-            return Scrape(source, start, time.monotonic_ns(), wall, tuple(samples))
-        except (HTTPError, URLError, OSError, ValueError) as exc:
-            # Avoid persisting endpoint contents, URLs, or exception messages with secrets.
-            return Scrape(
-                source, start, time.monotonic_ns(), time.time_ns(), (), type(exc).__name__
+            text = self.transport.get(
+                config.serving_url.rstrip("/") + "/metrics", config.request_timeout_seconds
             )
+            current = parse(
+                text,
+                {n for aliases in names.values() for n in aliases},
+                now,
+                config.max_gap_seconds,
+            )
+        except Exception as exc:
+            current = []
+            coverage.append("serving scrape failed: " + type(exc).__name__)
+        start = self.previous_time if self.previous_time is not None else now
+        elapsed = now - start
+        reason = None
+        if self.previous is None:
+            reason = "first scrape; no interval baseline"
+        elif self.previous_identity != config.identity.fingerprint:
+            reason = "deployment identity changed; new interval baseline"
+            start = now
+        elif elapsed <= 0 or elapsed > config.max_gap_seconds:
+            reason = "collection gap or non-monotonic timestamp"
+        if reason:
+            coverage.append(reason)
+        metrics = derive(
+            config.identity.engine,
+            self.previous or [],
+            current,
+            config.serving_labels,
+            elapsed,
+            reason,
+        )
+        if config.dcgm_url:
+            try:
+                gpu = parse(
+                    self.gpu_transport.get(config.dcgm_url, config.request_timeout_seconds),
+                    {n for aliases, _ in GPU_NAMES.values() for n in aliases},
+                    now,
+                    config.max_gap_seconds,
+                )
+            except Exception as exc:
+                gpu = []
+                coverage.append("DCGM scrape failed: " + type(exc).__name__)
+            for selector in config.gpu_selectors:
+                for name, (aliases, unit) in GPU_NAMES.items():
+                    value = gauge(gpu, aliases, selector)
+                    metrics.append(
+                        Metric(
+                            name,
+                            value,
+                            unit,
+                            "dcgm",
+                            labels=selector,
+                            unavailable_reason="missing/ambiguous/invalid GPU series"
+                            if value is None
+                            else None,
+                        )
+                    )
+        record = {
+            "start": start,
+            "end": now,
+            "source": "production_observation",
+            "metrics": [m.record() for m in metrics],
+            "coverage": coverage,
+            "diagnostic": self.store.diagnostic_overlap(config.identity.deployment, start, now),
+            "workload": {"source": "aggregate serving metrics", "request_content": "not_collected"},
+        }
+        self.store.observation(config.identity, record)
+        self.previous, self.previous_time = current, now
+        self.previous_identity = config.identity.fingerprint
+        return record
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(scrape, "gpu", config.dcgm_url, GPU_METRICS),
-            pool.submit(scrape, "serving", config.serving_url, serving_metrics(config.engine)),
-        ]
-        return tuple(f.result() for f in futures)
+    def run(self, stop: threading.Event | None = None, *, count=None):
+        stop = stop or threading.Event()
+        done = 0
+        while not stop.is_set() and (count is None or done < count):
+            self.collect_once()
+            done += 1
+            if count is None or done < count:
+                stop.wait(self.config.interval_seconds)

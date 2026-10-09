@@ -1,5 +1,0 @@
-# Metric name, type, help
-DCGM_FI_PROF_GR_ENGINE_ACTIVE, gauge, Fraction of interval with graphics or compute engine activity
-DCGM_FI_PROF_SM_ACTIVE, gauge, Active warp fraction averaged across SMs
-DCGM_FI_DEV_GPU_UTIL, gauge, GPU utilization percent
-DCGM_FI_DEV_POWER_USAGE, gauge, GPU power watts

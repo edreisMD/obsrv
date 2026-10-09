@@ -4,20 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "obsrv"
-version = "0.2.0"
-description = "GPU activity and inference-demand evidence for deployment optimization agents"
+version = "0.1.0"
+description = "Production profiler evidence for application-specific AI serving optimization"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 dependencies = ["prometheus-client>=0.20,<1"]
-classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: System :: Monitoring",
+]
+keywords = ["profiling", "inference", "vllm", "sglang", "vibesys"]
 
 [project.urls]
 Repository = "https://github.com/edreisMD/obsrv"
-Issues = "https://github.com/edreisMD/obsrv/issues"
+Documentation = "https://github.com/edreisMD/obsrv/blob/main/README.md"
 
 [project.scripts]
-obsrv = "obsrv.cli:main"
+obsrv = "obsrv.cli:entrypoint"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/obsrv"]
@@ -25,9 +31,30 @@ packages = ["src/obsrv"]
 [dependency-groups]
 dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = ["src/obsrv/_vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.hatch.build]
+exclude = [
+  "**/__pycache__/**", "**/*.pyc", "**/.env", "**/.env.*",
+  "**/*.sqlite*", "**/*.db", "**/*.db-*", "**/*.nsys-rep",
+  "**/*.pt.trace.json*", "**/*.trace.json*", "**/obsrv.json",
+  ".obsrv/**", "state/**", "artifacts/**", "traces/**", "exports/**",
+  "logs/**", "dist/**", "build/**", ".venv/**", "**/*.log",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/obsrv", "/tests", "/docs", "/examples/deployment.toml", "/scripts",
+  "/.github/workflows/ci.yml", "/.gitignore", "/README.md", "/LICENSE",
+  "/NOTICE", "/CONTRIBUTING.md", "/CHANGELOG.md", "/pyproject.toml", "/uv.lock",
+]

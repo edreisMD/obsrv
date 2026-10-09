@@ -1,6 +1,5 @@
-"""Explicit endpoint and GPU ownership declarations. No automatic label joining."""
+"""Explicit serving ownership and local artifact access; endpoints are never exported."""
 
-import hashlib
 import json
 import math
 import tomllib
@@ -8,107 +7,90 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-
-def _keys(data, allowed, scope):
-    unknown = set(data) - set(allowed)
-    if unknown:
-        raise ValueError(f"Unknown {scope} keys: {sorted(unknown)}")
+from .models import Identity
 
 
-def _labels(value):
-    if not isinstance(value, dict) or not all(
-        isinstance(k, str) and isinstance(v, str) for k, v in value.items()
-    ):
-        raise ValueError("Label selectors must be string-to-string tables")
-    return dict(value)
-
-
-@dataclass(frozen=True)
-class GPU:
-    id: str
-    labels: dict[str, str]
+def endpoint(value: str):
+    url = urlsplit(value)
+    if url.scheme not in {"http", "https"} or not url.hostname:
+        raise ValueError("endpoint must be an HTTP(S) URL")
+    if url.username or url.password or url.query or url.fragment:
+        raise ValueError("endpoint cannot contain credentials, query or fragment")
 
 
 @dataclass(frozen=True)
 class Config:
-    deployment: str
-    engine: str
+    identity: Identity
     serving_url: str
-    dcgm_url: str
-    gpus: tuple[GPU, ...]
+    trace_dir: Path
+    state_dir: Path = Path("state")
     serving_labels: dict[str, str] = field(default_factory=dict)
-    allocation: str = "shared"
-    interval_seconds: float = 1.0
-    timeout_seconds: float = 2.0
-    max_gap_seconds: float = 3.0
-    join_tolerance_seconds: float = 0.5
-    low_activity_threshold: float = 0.1
-    metadata: dict[str, str] = field(default_factory=dict)
+    dcgm_url: str | None = None
+    gpu_selectors: tuple[dict[str, str], ...] = ()
+    trace_patterns: dict[str, str] = field(default_factory=dict)
+    server_trace_dir: str | None = None
+    auth_env: str | None = None
+    interval_seconds: float = 5.0
+    request_timeout_seconds: float = 5.0
+    flush_timeout_seconds: float = 900.0
+    retention_days: float = 7.0
+    max_storage_bytes: int = 5 * 1024**3
+    max_gap_seconds: float = 15.0
 
     def __post_init__(self):
-        if not isinstance(self.deployment, str) or not self.deployment:
-            raise ValueError("deployment must be a nonempty string")
-        if self.engine not in {"vllm", "sglang"}:
-            raise ValueError("engine must be vllm or sglang")
-        if self.allocation not in {"exclusive", "shared"}:
-            raise ValueError("allocation must be exclusive or shared")
-        for url in (self.serving_url, self.dcgm_url):
-            parsed = urlsplit(url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                raise ValueError("Metrics endpoints must be HTTP(S) URLs")
-            if parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise ValueError("URLs cannot contain credentials, query strings, or fragments")
+        endpoint(self.serving_url)
+        if self.dcgm_url:
+            endpoint(self.dcgm_url)
+            if not self.gpu_selectors:
+                raise ValueError("DCGM requires explicit GPU UUID selectors")
+        for selector in self.gpu_selectors:
+            if not selector.get("UUID"):
+                raise ValueError("GPU selectors require UUID; add GPU_I_ID for MIG")
+        for i, first in enumerate(self.gpu_selectors):
+            for second in self.gpu_selectors[i + 1 :]:
+                if first["UUID"] == second["UUID"] and (
+                    not first.get("GPU_I_ID")
+                    or not second.get("GPU_I_ID")
+                    or first["GPU_I_ID"] == second["GPU_I_ID"]
+                ):
+                    raise ValueError("GPU selectors overlap")
+        for worker, pattern in self.trace_patterns.items():
+            if (
+                worker not in self.identity.workers
+                or not pattern
+                or Path(pattern).is_absolute()
+                or ".." in Path(pattern).parts
+            ):
+                raise ValueError("trace_patterns require declared workers and safe relative globs")
+        for selector in (self.serving_labels, *self.gpu_selectors):
+            if not all(isinstance(k, str) and isinstance(v, str) for k, v in selector.items()):
+                raise ValueError("selectors must be string-to-string mappings")
         for name in (
             "interval_seconds",
-            "timeout_seconds",
+            "request_timeout_seconds",
+            "flush_timeout_seconds",
+            "retention_days",
             "max_gap_seconds",
-            "join_tolerance_seconds",
+            "max_storage_bytes",
         ):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name} must be a number")
-            if not math.isfinite(value) or value <= 0:
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        if self.max_gap_seconds < self.interval_seconds:
-            raise ValueError("max_gap_seconds must be at least interval_seconds")
-        if not 0 <= self.low_activity_threshold <= 1:
-            raise ValueError("low_activity_threshold must be in [0, 1]")
-        if not self.gpus or len({g.id for g in self.gpus}) != len(self.gpus):
-            raise ValueError("Declare at least one GPU with unique ids")
-        selectors = []
-        for gpu in self.gpus:
-            if not gpu.id or not _labels(gpu.labels).get("UUID"):
-                raise ValueError("Each GPU selector requires a UUID (physical GPU or MIG entity)")
-            selectors.append(tuple(sorted(gpu.labels.items())))
-        if len(set(selectors)) != len(selectors):
-            raise ValueError("GPU selectors must be distinct")
-        for i, first in enumerate(self.gpus):
-            for second in self.gpus[i + 1 :]:
-                if first.labels["UUID"] == second.labels["UUID"] and (
-                    not first.labels.get("GPU_I_ID")
-                    or not second.labels.get("GPU_I_ID")
-                    or first.labels["GPU_I_ID"] == second.labels["GPU_I_ID"]
-                ):
-                    raise ValueError("Cannot count a physical GPU and its MIG children together")
-        _labels(self.serving_labels)
-        _labels(self.metadata)
 
-    def manifest(self):
-        from dataclasses import asdict
-
-        return asdict(self)
-
-    @property
-    def sha256(self):
-        return hashlib.sha256(json.dumps(self.manifest(), sort_keys=True).encode()).hexdigest()
-
-
-def load_config(path: str | Path) -> Config:
-    with Path(path).open("rb") as stream:
-        data = tomllib.load(stream)
-    _keys(data, Config.__dataclass_fields__, "config")
-    gpus = []
-    for entry in data.pop("gpus", []):
-        _keys(entry, {"id", "labels"}, "GPU")
-        gpus.append(GPU(entry["id"], _labels(entry["labels"])))
-    return Config(**data, gpus=tuple(gpus))
+    @classmethod
+    def load(cls, path: str | Path):
+        data = (
+            json.loads(Path(path).read_text())
+            if Path(path).suffix == ".json"
+            else tomllib.loads(Path(path).read_text())
+        )
+        raw = dict(data.pop("identity"))
+        if not isinstance(raw["workers"], list):
+            raise ValueError("identity.workers must be an array of worker names")
+        raw["workers"] = tuple(raw["workers"])
+        identity = Identity(**raw)
+        for key in ("trace_dir", "state_dir"):
+            if key in data:
+                data[key] = Path(data[key])
+        if "gpu_selectors" in data:
+            data["gpu_selectors"] = tuple(data["gpu_selectors"])
+        return cls(identity=identity, **data)

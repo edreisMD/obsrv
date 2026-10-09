@@ -1,0 +1,11 @@
+# Synthetic protocol fixture, not production measurements.
+# TYPE sglang:generation_tokens counter
+sglang:generation_tokens_total{model_name="test/model"} 100
+# TYPE sglang:prompt_tokens counter
+sglang:prompt_tokens_total{model_name="test/model"} 200
+# TYPE sglang:e2e_request_latency_seconds histogram
+sglang:e2e_request_latency_seconds_bucket{model_name="test/model",le="1"} 50
+sglang:e2e_request_latency_seconds_bucket{model_name="test/model",le="2"} 90
+sglang:e2e_request_latency_seconds_bucket{model_name="test/model",le="+Inf"} 100
+sglang:e2e_request_latency_seconds_count{model_name="test/model"} 100
+sglang:e2e_request_latency_seconds_sum{model_name="test/model"} 140
