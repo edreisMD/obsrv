@@ -20,7 +20,7 @@ keywords = ["profiling", "inference", "vllm", "sglang", "vibesys"]
 
 [project.urls]
 Repository = "https://github.com/edreisMD/obsrv"
-Documentation = "https://github.com/edreisMD/obsrv/blob/production-profiling/README.md"
+Documentation = "https://github.com/edreisMD/obsrv/blob/main/README.md"
 
 [project.scripts]
 obsrv = "obsrv.cli:entrypoint"

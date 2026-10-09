@@ -46,27 +46,27 @@ prove a speedup or replace correctness and controlled performance tests.
 
 ## Install
 
-Requires **Python 3.11+**. Install the production-profiler branch in a separate environment:
+Requires **Python 3.11+**. Install from `main` in a separate environment:
 
 ```bash
 python3 -m venv .obsrv-venv
 source .obsrv-venv/bin/activate
-python -m pip install "git+https://github.com/edreisMD/obsrv.git@production-profiling"
+python -m pip install "git+https://github.com/edreisMD/obsrv.git@main"
 obsrv --help
 ```
 
 Or clone it to inspect/edit the source:
 
 ```bash
-git clone --branch production-profiling https://github.com/edreisMD/obsrv.git
+git clone --branch main https://github.com/edreisMD/obsrv.git
 cd obsrv
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install .
 ```
 
-The `production-profiling` branch contains this headless profiler. The existing `main`
-branch contains the earlier dashboard package until the migration is merged.
+The `main` branch contains the production profiler. The earlier dashboard is retained
+in Git history and in the local archived package.
 This project has **not been published on PyPI**; do not assume `pip install obsrv`
 installs this package. The collector itself does not require PyTorch or CUDA.
 The serving engine needs a supported NVIDIA/CUDA environment for live GPU captures.

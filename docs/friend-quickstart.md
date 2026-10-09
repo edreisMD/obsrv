@@ -12,7 +12,7 @@ host or a sidecar. No PyTorch dependency is needed in this collector environment
 ```bash
 python3 -m venv .obsrv-venv
 source .obsrv-venv/bin/activate
-python -m pip install "git+https://github.com/edreisMD/obsrv.git@production-profiling"
+python -m pip install "git+https://github.com/edreisMD/obsrv.git@main"
 obsrv --help
 ```
 

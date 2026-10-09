@@ -41,8 +41,8 @@ or VibeSys official gate acceptance.
   canaries were excluded from all three release archives.
 - Serving authentication is separated from DCGM requests; the regression test confirms
   that the serving Bearer token is not forwarded to the exporter.
-- The production profiler is published on GitHub’s `production-profiling` branch.
-  The earlier dashboard remains on `main` pending the migration pull request.
+- The production profiler is published on GitHub’s `main` branch.
+  The earlier dashboard is retained in Git history and in the local archived package.
   PyPI publication is separate and has not occurred.
 
 The audit flags known private-data patterns and unexpected files. It is not a guarantee
